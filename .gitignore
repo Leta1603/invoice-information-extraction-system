@@ -218,3 +218,5 @@ __marimo__/
 # Folder with invoice images
 images/
 **/images.rar
+
+info/
