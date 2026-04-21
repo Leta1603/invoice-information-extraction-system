@@ -44,4 +44,3 @@ def load_model() -> FCOSDocumentDetector:
     model.to(device).eval()
     _model = model
     return _model
-

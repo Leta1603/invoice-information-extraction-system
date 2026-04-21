@@ -1,6 +1,5 @@
-# Import all ORM models so SQLAlchemy registers them with the metadata.
-from app.models.user import User  # noqa: F401
-from app.models.document import Document, DocumentStatus  # noqa: F401
-from app.models.extracted_data import ExtractedData  # noqa: F401
+from app.models.user import User
+from app.models.document import Document, DocumentStatus
+from app.models.extracted_data import ExtractedData
 
 __all__ = ["User", "Document", "DocumentStatus", "ExtractedData"]

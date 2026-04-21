@@ -18,7 +18,7 @@ async def lifespan(app: FastAPI):
     logger.info("Creating database tables …")
     from app.db.base import Base
     from app.db.session import engine
-    import app.models  # noqa: F401 — registers all ORM models
+    import app.models
 
     Base.metadata.create_all(bind=engine)
     logger.info("Database tables ready.")
@@ -30,13 +30,12 @@ async def lifespan(app: FastAPI):
     logger.info("ML model loaded.")
 
     yield
-    # ---------- shutdown ----------
     logger.info("Shutting down.")
 
 
 app = FastAPI(title=settings.APP_NAME, lifespan=lifespan)
 
-from app.api.router import api_router  # noqa: E402
+from app.api.router import api_router
 
 app.include_router(api_router, prefix="/api/v1")
 

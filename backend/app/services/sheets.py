@@ -25,7 +25,7 @@ _STRPTIME_FMTS = [
     "%d.%m.%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y",
     "%d.%m.%y", "%d/%m/%y", "%Y/%m/%d",
     "%b %d, %Y", "%b %d %Y", "%B %d, %Y", "%B %d %Y",  # Jan 11, 2023 / January 11 2023
-    "%b%d,%Y", "%b%d %Y",                               # Feb11,2023 / Feb11 2023
+    "%b%d,%Y", "%b%d %Y", # Feb11,2023 / Feb11 2023
 ]
 
 
@@ -46,7 +46,6 @@ def _normalize_date(raw: str) -> str:
         except ValueError:
             continue
 
-    # Try "31 декабря 2025" / "31 дек 2025" / "31 дек. 2025"
     m = re.match(
         r"(\d{1,2})\s+([а-яёА-ЯЁ]+)\.?\s+(\d{2,4})",
         cleaned,
@@ -62,7 +61,7 @@ def _normalize_date(raw: str) -> str:
             except ValueError:
                 pass
 
-    return raw  # fallback — return as-is
+    return raw 
 
 logger = logging.getLogger(__name__)
 

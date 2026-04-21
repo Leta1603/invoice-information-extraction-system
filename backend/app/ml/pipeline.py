@@ -1,15 +1,5 @@
 
-"""
-Full inference pipeline — exact port of the training notebook logic.
-
-Key differences vs. a generic FCOS pipeline:
-  * Image is resized to a fixed 512×512 (no aspect-ratio preservation)
-  * Normalisation: mean=0.5, std=0.5  (NOT ImageNet)
-  * Score = 0.7·cls_prob + 0.3·ctr_prob
-  * Per-class spatial heuristics for postprocessing
-  * Box expansion before OCR
-  * Per-field OCR config (PSM, whitelists) and cleaning
-"""
+"""FCOS inference pipeline for invoice field extraction."""
 from __future__ import annotations
 
 import logging
@@ -45,12 +35,8 @@ ID2LABEL = {
     4: "item_description",
 }
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 1. Image preprocessing — matches notebook InvoiceDataset exactly
-# ═══════════════════════════════════════════════════════════════════════════
-
 def preprocess_image(image: Image.Image) -> torch.Tensor:
-    """Resize to 512×512, normalize with mean=0.5/std=0.5. Returns [1,3,512,512]."""
+    """Resize to 512×512 and normalise with mean=0.5/std=0.5."""
     image = image.convert("RGB").resize((IMG_SIZE, IMG_SIZE))
     arr = np.array(image, dtype=np.float32) / 255.0
     tensor = torch.tensor(arr).permute(2, 0, 1)  # [3,H,W]
@@ -58,26 +44,11 @@ def preprocess_image(image: Image.Image) -> torch.Tensor:
     return tensor
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 2. FCOS decoding — matches notebook decode_fcos_predictions
-# ═══════════════════════════════════════════════════════════════════════════
-
 def _get_feature_map_locations(h: int, w: int, stride: int, device):
-    """Generate pixel-space centre coordinates for an H×W feature map.
-
-    Args:
-        h: Feature map height.
-        w: Feature map width.
-        stride: Downsampling stride of this FPN level.
-        device: Torch device to create tensors on.
-
-    Returns:
-        Tensor of shape ``[H, W, 2]`` with (x, y) centre coordinates.
-    """
     xs = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) * stride
     ys = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) * stride
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
-    return torch.stack([xx, yy], dim=-1)  # [H, W, 2]
+    return torch.stack([xx, yy], dim=-1)
 
 
 def decode_fcos_predictions(
@@ -96,18 +67,15 @@ def decode_fcos_predictions(
 
     for out in outputs:
         stride = out["stride"]
-        cls_probs = torch.sigmoid(out["cls_logits"])[0]       # [C, H, W]
-        ctr_probs = torch.sigmoid(out["ctr_logits"])[0, 0]    # [H, W]
-        reg_pred = out["bbox_reg"][0]                          # [4, H, W]
+        cls_probs = torch.sigmoid(out["cls_logits"])[0]
+        ctr_probs = torch.sigmoid(out["ctr_logits"])[0, 0]
+        reg_pred = out["bbox_reg"][0]
 
         C, h, w = cls_probs.shape
-        locations = _get_feature_map_locations(h, w, stride, cls_probs.device)  # [H,W,2]
+        locations = _get_feature_map_locations(h, w, stride, cls_probs.device)
 
-        # Best class per location
-        class_scores, class_ids = cls_probs.max(dim=0)  # both [H, W]
-
-        # Combined score (notebook formula)
-        combined = 0.7 * class_scores + 0.3 * ctr_probs  # [H, W]
+        class_scores, class_ids = cls_probs.max(dim=0)
+        combined = 0.7 * class_scores + 0.3 * ctr_probs
 
         mask = combined > score_threshold
         if mask.sum() == 0:
@@ -140,7 +108,7 @@ def decode_fcos_predictions(
     scores = torch.cat(all_scores)
     labels = torch.cat(all_labels)
 
-    # Per-class NMS (matching notebook)
+    # Per-class NMS
     final_preds = []
     for cls_id in labels.unique():
         cls_mask = labels == cls_id
@@ -159,10 +127,6 @@ def decode_fcos_predictions(
     return final_preds[:top_k]
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 3. Spatial postprocessing — exact port of notebook heuristics
-# ═══════════════════════════════════════════════════════════════════════════
-
 def _get_preds_by_class(preds, class_id):
     """Filter predictions list to a single class ID."""
     return [p for p in preds if p[5] == class_id]
@@ -177,11 +141,6 @@ def _box_center(p):
 
 
 def _pick_best_invoice_number(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
-    """Select the most likely invoice-number box using spatial heuristics.
-
-    Prefers boxes in the top 35 % of the image that are not too wide.
-    Falls back to highest-score candidate if no box passes the filter.
-    """
     candidates = _get_preds_by_class(preds, INVOICE_NUMBER_ID)
     if not candidates:
         return None
@@ -198,11 +157,7 @@ def _pick_best_invoice_number(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
     return max(candidates, key=lambda p: p[4])
 
 
-def _pick_best_invoice_date(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
-    """Select the most likely invoice-date box using spatial heuristics.
-
-    Prefers compact boxes in the top 40 % of the image.
-    """
+def _pick_best_invoice_date(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):"
     candidates = _get_preds_by_class(preds, INVOICE_DATE_ID)
     if not candidates:
         return None
@@ -220,11 +175,6 @@ def _pick_best_invoice_date(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_seller(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
-    """Select the most likely seller box.
-
-    Ranks candidates by a weighted combination of detection confidence,
-    horizontal position (left-aligned) and vertical position (top region).
-    """
     candidates = _get_preds_by_class(preds, SELLER_ID)
     if not candidates:
         return None
@@ -247,11 +197,6 @@ def _pick_best_seller(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_item_description(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
-    """Select the most likely item-description box.
-
-    Filters to boxes in the mid-section of the image that are wide enough
-    to represent a tabular description block.
-    """
     candidates = _get_preds_by_class(preds, ITEM_DESCRIPTION_ID)
     if not candidates:
         return None
@@ -279,10 +224,6 @@ def _pick_best_item_description(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_total_amount(preds, item_desc_box=None, img_w=IMG_SIZE, img_h=IMG_SIZE):
-    """Select the most likely total-amount box.
-
-    Prefers boxes in the lower-right quadrant, below the item description.
-    """
     candidates = _get_preds_by_class(preds, TOTAL_AMOUNT_ID)
     if not candidates:
         return None
@@ -309,7 +250,7 @@ def _pick_best_total_amount(preds, item_desc_box=None, img_w=IMG_SIZE, img_h=IMG
 
 
 def postprocess_predictions(preds):
-    """Per-class spatial heuristics → at most one box per class."""
+    """Apply per-class spatial heuristics; returns at most one box per class."""
     invoice_number = _pick_best_invoice_number(preds)
     invoice_date = _pick_best_invoice_date(preds)
     seller = _pick_best_seller(preds)
@@ -322,10 +263,6 @@ def postprocess_predictions(preds):
             final.append(p)
     return final
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 4. Box refinement — expand boxes with class-specific padding
-# ═══════════════════════════════════════════════════════════════════════════
 
 def _expand_box(p, pad_left=0, pad_top=0, pad_right=0, pad_bottom=0,
                 img_w=IMG_SIZE, img_h=IMG_SIZE):
@@ -341,11 +278,7 @@ def _expand_box(p, pad_left=0, pad_top=0, pad_right=0, pad_bottom=0,
 
 
 def refine_final_boxes(final_preds):
-    """Apply class-specific padding to expand boxes before OCR cropping.
-
-    Slightly larger crops improve Tesseract recognition accuracy by
-    reducing character clipping at box boundaries.
-    """
+    """Expand boxes with class-specific padding before OCR cropping."""
     refined = []
     for p in final_preds:
         cls_id = p[5]
@@ -359,12 +292,7 @@ def refine_final_boxes(final_preds):
     return refined
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 5. OCR — crop from tensor, preprocess, tesseract
-# ═══════════════════════════════════════════════════════════════════════════
-
 def _crop_box_from_tensor(image_tensor: torch.Tensor, box: list) -> torch.Tensor:
-    """Crop [C,H,W] tensor by [x1,y1,x2,y2,score,cls_id]."""
     x1 = int(max(0, round(box[0])))
     y1 = int(max(0, round(box[1])))
     x2 = int(round(box[2]))
@@ -373,7 +301,6 @@ def _crop_box_from_tensor(image_tensor: torch.Tensor, box: list) -> torch.Tensor
 
 
 def _tensor_to_ocr_image(crop_tensor: torch.Tensor) -> np.ndarray:
-    """Denormalize (mean=0.5, std=0.5) → uint8."""
     img = crop_tensor.permute(1, 2, 0).cpu().numpy()
     img = (img * 0.5) + 0.5
     img = np.clip(img, 0, 1)
@@ -381,7 +308,6 @@ def _tensor_to_ocr_image(crop_tensor: torch.Tensor) -> np.ndarray:
 
 
 def _preprocess_crop_for_ocr(crop_tensor: torch.Tensor, upscale: int = 3):
-    """Grayscale → upscale → two binarisation thresholds."""
     img = _tensor_to_ocr_image(crop_tensor)
     if img.ndim == 3:
         gray = np.mean(img, axis=2).astype(np.uint8)
@@ -419,14 +345,9 @@ def _run_ocr_on_crop(crop_tensor: torch.Tensor, psm: int = 6,
         except Exception:
             variants.append("")
 
-    # Pick the most content-rich variant
     variants.sort(key=lambda x: len(x.strip()), reverse=True)
     return variants[0] if variants else ""
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# 6. Text cleaning — exact port from notebook
-# ═══════════════════════════════════════════════════════════════════════════
 
 def _normalize_spaces(text: str) -> str:
     text = text.replace("\r", "\n").replace("\n", " ")
@@ -549,32 +470,23 @@ def clean_item_description(text: str) -> str | None:
     return result if len(result) >= 3 else None
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# 7. Main entry point
-# ═══════════════════════════════════════════════════════════════════════════
-
 def process_document(image: Image.Image) -> dict:
-    """
-    Run full pipeline on a PIL image.
+    """Run full pipeline on a PIL image.
 
-    Returns dict with keys:
-        seller, invoice_number, invoice_date, total_amount,
-        item_description, confidence
+    Returns dict with keys: seller, invoice_number, invoice_date,
+    total_amount, item_description, confidence.
     """
     logger.info("Processing document %dx%d px", *image.size)
 
     model = load_model()
     device = torch.device(settings.DEVICE)
 
-    # 1. Preprocess (512×512, mean=0.5/std=0.5)
-    image_tensor = preprocess_image(image)  # [3, 512, 512]
+    image_tensor = preprocess_image(image)
     batch = image_tensor.unsqueeze(0).to(device)
 
-    # 2. Model forward → list of dicts
     with torch.no_grad():
         outputs = model(batch)
 
-    # 3. Decode
     raw_preds = decode_fcos_predictions(
         outputs,
         img_size=IMG_SIZE,
@@ -583,20 +495,10 @@ def process_document(image: Image.Image) -> dict:
         top_k=30,
     )
     logger.info("Raw detections: %d", len(raw_preds))
-    for p in raw_preds[:10]:
-        logger.info(
-            "  %s  score=%.3f  box=[%.0f,%.0f,%.0f,%.0f]",
-            ID2LABEL[p[5]], p[4], *p[:4],
-        )
 
-    # 4. Per-class spatial postprocessing
     final_preds = postprocess_predictions(raw_preds)
-    logger.info("After spatial filtering: %d fields", len(final_preds))
-
-    # 5. Expand boxes
     refined_preds = refine_final_boxes(final_preds)
 
-    # 6. OCR + clean per field
     fields: dict = {
         "seller": None,
         "invoice_number": None,
@@ -638,7 +540,6 @@ def process_document(image: Image.Image) -> dict:
 
         logger.info("OCR [%s] raw: %r", name, raw_text[:120])
 
-        # Clean
         if cls_id == SELLER_ID:
             fields["seller"] = clean_seller(raw_text)
         elif cls_id == INVOICE_NUMBER_ID:

@@ -1,22 +1,4 @@
-"""
-FCOSDocumentDetector — architecture matches best_fcos_detector.pt exactly.
-
-Checkpoint key structure (114 tensors):
-  backbone.stem.{0,1}.block.{0=Conv,1=BN}
-  backbone.stage{2..5}.{0,1}.block.{0=Conv,1=BN}
-  fpn.lat{3,4,5}.{weight,bias}          — plain Conv2d (1x1)
-  fpn.out{3,4,5}.block.{0=Conv,1=BN}   — ConvBN (3x3)
-  head.shared.{0..3}.block.{0=Conv,1=BN}
-  head.cls_logits / head.ctr_logits / head.bbox_reg — plain Conv2d (3x3)
-
-Channel progression:
-  stem      : 3 → 32 (2 ConvBN, stride-2 then stride-1)
-  stage2    : 32 → 64
-  stage3    : 64 → 128   → C3  stride-8
-  stage4    : 128 → 256  → C4  stride-16
-  stage5    : 256 → 512  → C5  stride-32
-  FPN out   : 128 channels, 3 levels  strides [8, 16, 32]
-"""
+"""FCOS document detector model."""
 from __future__ import annotations
 
 from typing import List, Tuple
@@ -26,18 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ---------------------------------------------------------------------------
-# Building block: Conv + BN + ReLU stored as self.block (sequential)
-# so state-dict paths are  <name>.block.0.*  and  <name>.block.1.*
-# ---------------------------------------------------------------------------
-
 class ConvBN(nn.Module):
-    """Conv2d → BatchNorm2d → ReLU building block.
-
-    State-dict paths for weights are stored as
-    ``<name>.block.0.*`` (Conv2d) and ``<name>.block.1.*`` (BN)
-    to match the training checkpoint layout.
-    """
+    """Conv2d → BatchNorm2d → ReLU building block."""
 
     def __init__(self, in_ch: int, out_ch: int, k: int = 3, s: int = 1, p: int = 1) -> None:
         """Initialise convolutional block.
@@ -61,36 +33,27 @@ class ConvBN(nn.Module):
         return self.block(x)
 
 
-# ---------------------------------------------------------------------------
-# Backbone — custom lightweight CNN
-# ---------------------------------------------------------------------------
-
 class _Backbone(nn.Module):
     """Lightweight CNN backbone producing multi-scale feature maps C3/C4/C5."""
 
     def __init__(self) -> None:
         super().__init__()
-        # stem: two ConvBN blocks (stride-2 → stride-1)
         self.stem = nn.ModuleList([
-            ConvBN(3, 32, k=3, s=2, p=1),    # stem.0
-            ConvBN(32, 32, k=3, s=1, p=1),   # stem.1
+            ConvBN(3, 32, k=3, s=2, p=1),
+            ConvBN(32, 32, k=3, s=1, p=1),
         ])
-        # stage2: stride-4
         self.stage2 = nn.ModuleList([
             ConvBN(32, 64, k=3, s=2, p=1),
             ConvBN(64, 64, k=3, s=1, p=1),
         ])
-        # stage3: stride-8  → C3 (128 ch)
         self.stage3 = nn.ModuleList([
             ConvBN(64, 128, k=3, s=2, p=1),
             ConvBN(128, 128, k=3, s=1, p=1),
         ])
-        # stage4: stride-16 → C4 (256 ch)
         self.stage4 = nn.ModuleList([
             ConvBN(128, 256, k=3, s=2, p=1),
             ConvBN(256, 256, k=3, s=1, p=1),
         ])
-        # stage5: stride-32 → C5 (512 ch)
         self.stage5 = nn.ModuleList([
             ConvBN(256, 512, k=3, s=2, p=1),
             ConvBN(512, 512, k=3, s=1, p=1),
@@ -113,30 +76,24 @@ class _Backbone(nn.Module):
             x = block(x)
         for block in self.stage3:
             x = block(x)
-        c3 = x  # 128 ch, stride 8
+        c3 = x
         for block in self.stage4:
             x = block(x)
-        c4 = x  # 256 ch, stride 16
+        c4 = x
         for block in self.stage5:
             x = block(x)
-        c5 = x  # 512 ch, stride 32
+        c5 = x
         return c3, c4, c5
 
-
-# ---------------------------------------------------------------------------
-# FPN — 3 levels (P3/P4/P5), 128 channels
-# ---------------------------------------------------------------------------
 
 class _FPN(nn.Module):
     """Feature Pyramid Network with 3 levels (P3/P4/P5) and 128 output channels."""
 
     def __init__(self) -> None:
         super().__init__()
-        # plain 1x1 lateral convs (with bias → stored as .weight / .bias directly)
         self.lat3 = nn.Conv2d(128, 128, 1)
         self.lat4 = nn.Conv2d(256, 128, 1)
         self.lat5 = nn.Conv2d(512, 128, 1)
-        # output ConvBN (3x3)
         self.out3 = ConvBN(128, 128, k=3, s=1, p=1)
         self.out4 = ConvBN(128, 128, k=3, s=1, p=1)
         self.out5 = ConvBN(128, 128, k=3, s=1, p=1)
@@ -163,23 +120,10 @@ class _FPN(nn.Module):
         return [self.out3(p3), self.out4(p4), self.out5(p5)]
 
 
-# ---------------------------------------------------------------------------
-# Shared detection head — processes one feature map at a time (like notebook)
-# ---------------------------------------------------------------------------
-
 class _Head(nn.Module):
-    """Shared detection head applied to each FPN level.
-
-    Outputs raw (un-sigmoided) logits for class, centerness, and bbox regression.
-    """
+    """Shared detection head for all FPN levels."""
 
     def __init__(self, in_ch: int = 128, num_classes: int = 5) -> None:
-        """Initialise detection head.
-
-        Args:
-            in_ch: Number of input feature channels (must match FPN output).
-            num_classes: Number of object classes to detect.
-        """
         super().__init__()
         self.shared = nn.ModuleList([ConvBN(in_ch, in_ch) for _ in range(4)])
         self.cls_logits = nn.Conv2d(in_ch, num_classes, 3, padding=1)
@@ -203,17 +147,8 @@ class _Head(nn.Module):
         return cls_logits, ctr_logits, bbox_reg
 
 
-# ---------------------------------------------------------------------------
-# Public detector class
-# ---------------------------------------------------------------------------
-
 class FCOSDocumentDetector(nn.Module):
-    """FCOS-based detector for invoice field localisation.
-
-    Combines a lightweight CNN backbone, a 3-level FPN, and a shared
-    detection head.  Architecture matches ``best_fcos_detector.pt`` exactly
-    (114 state-dict keys).
-    """
+    """FCOS detector for invoice field localisation."""
 
     NUM_CLASSES: int = 5
     CLASS_NAMES: List[str] = [
@@ -223,7 +158,6 @@ class FCOSDocumentDetector(nn.Module):
         "total_amount",
         "item_description",
     ]
-    # 3 FPN levels only
     FPN_STRIDES: List[int] = [8, 16, 32]
 
     def __init__(self, num_classes: int = 5) -> None:
@@ -259,5 +193,3 @@ class FCOSDocumentDetector(nn.Module):
                 "bbox_reg": bbox_reg,
             })
         return outputs
-
-

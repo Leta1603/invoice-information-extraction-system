@@ -5,7 +5,6 @@ Document handling flow:
 from __future__ import annotations
 
 import logging
-from collections import deque
 from typing import Optional
 
 import aiohttp
@@ -33,10 +32,6 @@ _MAX_FILE_SIZE = 20 * 1024 * 1024
 
 # Users currently being processed (prevents parallel submissions)
 _processing_users: set[int] = set()
-
-# Media group IDs already accepted for processing (deduplicates album sends)
-# deque with maxlen caps memory usage
-_seen_media_groups: deque[str] = deque(maxlen=256)
 
 
 # ---------------------------------------------------------------------------
@@ -131,13 +126,12 @@ async def _send_to_backend(
 async def cmd_start(message: Message) -> None:
     await message.answer(
         "👋 <b>Привет!</b> Я помогу извлечь данные из счетов.\n\n"
-        "Отправьте мне <b>одно фото</b> счёта, и я автоматически распознаю:\n\n"
+        "Отправьте мне <b>фото</b> счёта, и я автоматически распознаю:\n\n"
         "  • Продавца\n"
         "  • Номер счёта\n"
         "  • Дату\n"
         "  • Сумму\n"
-        "  • Описание позиций\n\n"
-        "⚠️ Отправляйте по одному фото за раз.",
+        "  • Описание позиций",
         reply_markup=_main_keyboard(),
     )
 
@@ -169,16 +163,6 @@ async def handle_help_button(message: Message) -> None:
 
 @router.message(F.photo)
 async def handle_photo(message: Message, bot: Bot) -> None:
-    # Deduplicate photos sent as an album (media group)
-    if message.media_group_id is not None:
-        if message.media_group_id in _seen_media_groups:
-            return  # silently skip extra photos from the same album
-        _seen_media_groups.append(message.media_group_id)
-        await message.answer(
-            "⚠️ Вы отправили несколько фото сразу.\n"
-            "Я обработаю только первое — отправляйте по одному счёту за раз."
-        )
-
     user_id = message.from_user.id
     if user_id in _processing_users:
         await message.answer("⏳ Подождите — я ещё обрабатываю предыдущий счёт.")
