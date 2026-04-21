@@ -103,11 +103,7 @@ cd invoice-information-extraction-system
 
 ### 2. Configure environment
 
-Copy the template and fill in your values:
-
-```bash
-cp .env.example .env
-```
+Create a `.env` file in the project root with the following variables:
 
 | Variable | Description |
 |---|---|
