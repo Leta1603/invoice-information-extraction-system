@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 def _client():
+    """Create and return a boto3 S3 client configured for MinIO."""
     return boto3.client(
         "s3",
         endpoint_url=settings.S3_ENDPOINT,
@@ -22,6 +23,7 @@ def _client():
 
 
 def _ensure_bucket(client) -> None:
+    """Create the configured S3 bucket if it does not already exist."""
     try:
         client.head_bucket(Bucket=settings.S3_BUCKET)
     except ClientError:

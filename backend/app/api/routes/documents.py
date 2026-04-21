@@ -41,6 +41,16 @@ _ALLOWED_TYPES = frozenset(
 def _get_or_create_user(
     db: Session, telegram_id: int, username: Optional[str]
 ) -> User:
+    """Return an existing User row or create a new one.
+
+    Args:
+        db: Active SQLAlchemy session.
+        telegram_id: Unique Telegram user identifier.
+        username: Optional Telegram @username.
+
+    Returns:
+        Persisted ``User`` ORM instance.
+    """
     user = db.query(User).filter(User.telegram_id == telegram_id).first()
     if not user:
         user = User(telegram_id=telegram_id, username=username)
@@ -51,6 +61,20 @@ def _get_or_create_user(
 
 
 def _bytes_to_image(file_bytes: bytes, content_type: str) -> Image.Image:
+    """Decode raw file bytes into a PIL RGB image.
+
+    PDF files are rasterised at 2× scale using PyMuPDF (first page only).
+
+    Args:
+        file_bytes: Raw binary content of the uploaded file.
+        content_type: MIME type string (e.g. ``'image/jpeg'``).
+
+    Returns:
+        PIL ``Image`` in RGB mode.
+
+    Raises:
+        HTTPException: 415 if PDF support library is unavailable.
+    """
     if content_type == "application/pdf":
         try:
             import fitz  # PyMuPDF

@@ -63,6 +63,17 @@ def preprocess_image(image: Image.Image) -> torch.Tensor:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _get_feature_map_locations(h: int, w: int, stride: int, device):
+    """Generate pixel-space centre coordinates for an H×W feature map.
+
+    Args:
+        h: Feature map height.
+        w: Feature map width.
+        stride: Downsampling stride of this FPN level.
+        device: Torch device to create tensors on.
+
+    Returns:
+        Tensor of shape ``[H, W, 2]`` with (x, y) centre coordinates.
+    """
     xs = (torch.arange(w, device=device, dtype=torch.float32) + 0.5) * stride
     ys = (torch.arange(h, device=device, dtype=torch.float32) + 0.5) * stride
     yy, xx = torch.meshgrid(ys, xs, indexing="ij")
@@ -153,16 +164,24 @@ def decode_fcos_predictions(
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _get_preds_by_class(preds, class_id):
+    """Filter predictions list to a single class ID."""
     return [p for p in preds if p[5] == class_id]
 
 def _box_area(p):
+    """Return bounding-box area; 0 if degenerate."""
     return max(0, p[2] - p[0]) * max(0, p[3] - p[1])
 
 def _box_center(p):
+    """Return (cx, cy) centre of a prediction box."""
     return (p[0] + p[2]) / 2.0, (p[1] + p[3]) / 2.0
 
 
 def _pick_best_invoice_number(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
+    """Select the most likely invoice-number box using spatial heuristics.
+
+    Prefers boxes in the top 35 % of the image that are not too wide.
+    Falls back to highest-score candidate if no box passes the filter.
+    """
     candidates = _get_preds_by_class(preds, INVOICE_NUMBER_ID)
     if not candidates:
         return None
@@ -180,6 +199,10 @@ def _pick_best_invoice_number(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_invoice_date(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
+    """Select the most likely invoice-date box using spatial heuristics.
+
+    Prefers compact boxes in the top 40 % of the image.
+    """
     candidates = _get_preds_by_class(preds, INVOICE_DATE_ID)
     if not candidates:
         return None
@@ -197,6 +220,11 @@ def _pick_best_invoice_date(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_seller(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
+    """Select the most likely seller box.
+
+    Ranks candidates by a weighted combination of detection confidence,
+    horizontal position (left-aligned) and vertical position (top region).
+    """
     candidates = _get_preds_by_class(preds, SELLER_ID)
     if not candidates:
         return None
@@ -219,6 +247,11 @@ def _pick_best_seller(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_item_description(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
+    """Select the most likely item-description box.
+
+    Filters to boxes in the mid-section of the image that are wide enough
+    to represent a tabular description block.
+    """
     candidates = _get_preds_by_class(preds, ITEM_DESCRIPTION_ID)
     if not candidates:
         return None
@@ -246,6 +279,10 @@ def _pick_best_item_description(preds, img_w=IMG_SIZE, img_h=IMG_SIZE):
 
 
 def _pick_best_total_amount(preds, item_desc_box=None, img_w=IMG_SIZE, img_h=IMG_SIZE):
+    """Select the most likely total-amount box.
+
+    Prefers boxes in the lower-right quadrant, below the item description.
+    """
     candidates = _get_preds_by_class(preds, TOTAL_AMOUNT_ID)
     if not candidates:
         return None
@@ -304,6 +341,11 @@ def _expand_box(p, pad_left=0, pad_top=0, pad_right=0, pad_bottom=0,
 
 
 def refine_final_boxes(final_preds):
+    """Apply class-specific padding to expand boxes before OCR cropping.
+
+    Slightly larger crops improve Tesseract recognition accuracy by
+    reducing character clipping at box boundaries.
+    """
     refined = []
     for p in final_preds:
         cls_id = p[5]
