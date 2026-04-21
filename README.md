@@ -205,4 +205,4 @@ python -m app.main
 The model was trained on a custom annotated dataset of invoice images in COCO format.
 Dataset splits are stored in `data/` (indices only; raw images are not committed).
 
-Training details and exploratory analysis: [`Dataset.ipynb`](Dataset.ipynb)
+Training details and exploratory analysis: [`dataset_exploration.ipynb`](dataset_exploration.ipynb)
