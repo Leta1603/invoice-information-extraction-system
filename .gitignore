@@ -160,6 +160,7 @@ venv.bak/
 # Secrets & large model files
 backend/app/credentials.json
 *.pt
+.github/
 
 # Spyder project settings
 .spyderproject
