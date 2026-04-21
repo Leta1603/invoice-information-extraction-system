@@ -157,6 +157,10 @@ ENV/
 env.bak/
 venv.bak/
 
+# Secrets & large model files
+backend/app/credentials.json
+*.pt
+
 # Spyder project settings
 .spyderproject
 .spyproject
@@ -218,3 +222,5 @@ __marimo__/
 # Folder with invoice images
 images/
 **/images.rar
+
+info/
